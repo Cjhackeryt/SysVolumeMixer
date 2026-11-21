@@ -228,6 +228,61 @@ public sealed class VolumeMixerService : IAsyncDisposable
 			out error);
 	}
 
+	public bool TrySetSlotVolume(
+		int page,
+		int column,
+		int volumePercent,
+		out AudioApplication? application,
+		out int newVolumePercent,
+		out string? error)
+	{
+		application = null;
+		newVolumePercent = 0;
+		error = null;
+		if (page < 0 || column is < 0 or >= SlotCount || volumePercent is < 0 or > 100)
+		{
+			error = "The mixer page, column, or target volume is invalid.";
+			return false;
+		}
+
+		lock (_gate)
+		{
+			if (page >= GetPageCountLocked())
+			{
+				error = "The mixer page no longer exists.";
+				return false;
+			}
+
+			_page = page;
+			application = _applications.ElementAtOrDefault(page * SlotCount + column);
+		}
+
+		if (application is null || !application.IsActive)
+		{
+			error = "No active audio application is assigned to this mixer column.";
+			return false;
+		}
+
+		if (!_audio.TrySetVolume(application.Key, volumePercent, out newVolumePercent, out error))
+		{
+			return false;
+		}
+
+		var updatedApplication = application with { VolumePercent = newVolumePercent };
+		application = updatedApplication;
+		lock (_gate)
+		{
+			var currentIndex = Array.FindIndex(_applications, candidate =>
+				string.Equals(candidate.Key, updatedApplication.Key, StringComparison.OrdinalIgnoreCase));
+			if (currentIndex >= 0)
+			{
+				_applications[currentIndex] = updatedApplication;
+			}
+		}
+
+		return true;
+	}
+
 	public async ValueTask DisposeAsync()
 	{
 		Timer? timer;

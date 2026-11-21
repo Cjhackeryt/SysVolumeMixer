@@ -30,20 +30,16 @@ public sealed class PluginIntegration : IPluginIntegration, IProfileProvider, IV
 		_variables = variables;
 		_catalogs = catalogs;
 		_logger = logger.ForContext<PluginIntegration>();
-		_logger.Information("[VolumeMixer] Registering VolumeUp action");
-		_logger.Information("[VolumeMixer] Registering Application virtual widget");
-		_logger.Information("[VolumeMixer] Registering VolumeDown action");
+		_logger.Information("[SysVolumeMixer] Registering manual volume actions and virtual sliders");
 		Actions =
 		[
 			new VolumeUpAction(mixer, logger),
 			new VolumeDownAction(mixer, logger),
 		];
-		_logger.Information("[VolumeMixer] Actions registered successfully");
+		_logger.Information("[SysVolumeMixer] Actions registered successfully");
 	}
 
 	public IReadOnlyList<IActionDefinition> Actions { get; }
-
-	public string ProviderName => "Volume Mixer";
 
 	public IReadOnlyList<VirtualProfileDescriptor> GetProfiles() => VolumeMixerProfile.Build(_mixer, _logger);
 
@@ -61,7 +57,7 @@ public sealed class PluginIntegration : IPluginIntegration, IProfileProvider, IV
 
 	public string CatalogName => VolumeMixerVariableProvider.CatalogName;
 
-	public int? CatalogEntryCount => _variables.CatalogEntryCount;
+	public int? CatalogEntryCount => null;
 
 	public ValueTask<VariableReading> ReadAsync(string localId, CancellationToken cancellationToken = default) =>
 		_variables.ReadAsync(localId, cancellationToken);
@@ -70,13 +66,16 @@ public sealed class PluginIntegration : IPluginIntegration, IProfileProvider, IV
 		string localId,
 		object? value,
 		CancellationToken cancellationToken = default) =>
-		VolumeMixerVariableProvider.SetValueAsync(localId, value, cancellationToken);
+		_variables.SetValueAsync(localId, value, cancellationToken);
 
 	public ValueTask<VariableDefinition?> ResolveAsync(string localId, CancellationToken cancellationToken) =>
 		_variables.ResolveAsync(localId, cancellationToken);
 
-	public ValueTask<VariableCatalogPage> DiscoverAsync(VariableCatalogQuery query, CancellationToken cancellationToken) =>
-		_variables.DiscoverAsync(query, cancellationToken);
+	public ValueTask<VariableCatalogPage> DiscoverAsync(VariableCatalogQuery query, CancellationToken cancellationToken)
+	{
+		cancellationToken.ThrowIfCancellationRequested();
+		return ValueTask.FromResult(new VariableCatalogPage { Items = [] });
+	}
 
 	public ValueTask<IReadOnlyList<VariableValue>> SubscribeAsync(
 		IReadOnlyCollection<string> localIds,
@@ -88,7 +87,7 @@ public sealed class PluginIntegration : IPluginIntegration, IProfileProvider, IV
 
 	public Task InitializeAsync(IIntegrationContext context)
 	{
-		_logger.Information("[VolumeMixer] Plugin initialized");
+		_logger.Information("[SysVolumeMixer] Plugin initialized");
 		if (!_attached)
 		{
 			_mixer.Changed += OnMixerChanged;
@@ -97,7 +96,7 @@ public sealed class PluginIntegration : IPluginIntegration, IProfileProvider, IV
 
 		_mixer.Start();
 		_catalogs.CatalogChanged(CapabilityKinds.VirtualProfiles, reason: "mixer-initialized");
-		_logger.Information("[VolumeMixer] Virtual deck created: 6x3");
+		_logger.Information("[SysVolumeMixer] Virtual mixer created with six vertical sliders per page");
 		return Task.CompletedTask;
 	}
 
@@ -110,7 +109,7 @@ public sealed class PluginIntegration : IPluginIntegration, IProfileProvider, IV
 		}
 
 		await _mixer.DisposeAsync().ConfigureAwait(false);
-		_logger.Information("[VolumeMixer] Plugin shut down");
+		_logger.Information("[SysVolumeMixer] Plugin shut down");
 	}
 
 	public Task HandleWidgetInteractionAsync(
@@ -121,14 +120,14 @@ public sealed class PluginIntegration : IPluginIntegration, IProfileProvider, IV
 	{
 		if (!VolumeMixerProfile.TryParseWidget(folderId, widgetId, out var page, out var column, out var direction))
 		{
-			_logger.Warning("[VolumeMixer] Ignored unknown virtual widget {Folder}/{Widget}", folderId, widgetId);
+			_logger.Warning("[SysVolumeMixer] Ignored unknown virtual widget {Folder}/{Widget}", folderId, widgetId);
 			return Task.CompletedTask;
 		}
 
 		if (!string.Equals(interaction.TriggerType, "press", StringComparison.OrdinalIgnoreCase) &&
 			!string.Equals(interaction.TriggerType, "onShortPress", StringComparison.OrdinalIgnoreCase))
 		{
-			_logger.Debug("[VolumeMixer] Ignored widget trigger {Trigger} on {Folder}/{Widget}",
+			_logger.Debug("[SysVolumeMixer] Ignored widget trigger {Trigger} on {Folder}/{Widget}",
 				interaction.TriggerType, folderId, widgetId);
 			return Task.CompletedTask;
 		}
@@ -136,7 +135,7 @@ public sealed class PluginIntegration : IPluginIntegration, IProfileProvider, IV
 		if (direction == 0)
 		{
 			_mixer.SelectPage(page);
-			_logger.Debug("[VolumeMixer] Application tile pressed at column {Column} on page {Page}", column, page + 1);
+			_logger.Debug("[SysVolumeMixer] Mixer slider selected at column {Column} on page {Page}", column, page + 1);
 			return Task.CompletedTask;
 		}
 
@@ -147,33 +146,33 @@ public sealed class PluginIntegration : IPluginIntegration, IProfileProvider, IV
 			{
 				if (application is null)
 				{
-					_logger.Debug("[VolumeMixer] Ignored volume press for an empty or inactive column {Column} on page {Page}: {Reason}",
+					_logger.Debug("[SysVolumeMixer] Ignored volume press for an empty or inactive column {Column} on page {Page}: {Reason}",
 						column, page + 1, error);
 				}
 				else
 				{
-					_logger.Warning("[VolumeMixer] Volume change failed for column {Column} on page {Page}: {Reason}",
+					_logger.Warning("[SysVolumeMixer] Volume change failed for column {Column} on page {Page}: {Reason}",
 						column, page + 1, error);
 				}
 
 				return Task.CompletedTask;
 			}
 
-			_logger.Information("[VolumeMixer] Volume changed for {Application} to {Volume}%",
+			_logger.Information("[SysVolumeMixer] Volume changed for {Application} to {Volume}%",
 				application.DisplayName, volume);
 			_mixer.RefreshNow();
 			return Task.CompletedTask;
 		}
 		catch (Exception exception)
 		{
-			_logger.Error(exception, "[VolumeMixer] Widget press failed for {Folder}/{Widget}", folderId, widgetId);
+			_logger.Error(exception, "[SysVolumeMixer] Widget press failed for {Folder}/{Widget}", folderId, widgetId);
 			throw;
 		}
 	}
 
 	private void OnMixerChanged()
 	{
-		_logger.Debug("[VolumeMixer] Audio application catalogue changed");
+		_logger.Debug("[SysVolumeMixer] Audio application catalogue changed");
 		_catalogs.CatalogChanged(CapabilityKinds.VirtualProfiles, reason: "audio-applications-changed");
 		_catalogs.CatalogChanged(CapabilityKinds.Variables, reason: "audio-applications-changed");
 	}

@@ -5,7 +5,7 @@
         <!-- Pinned rather than taken from the project file name: manifest.json declares this executable
              name, and the generated Strings class lives in this namespace, so renaming the .csproj later
              must neither rename the built executable nor move Strings out from under the code. -->
-        <AssemblyName>VolumeMixer</AssemblyName>
+        <AssemblyName>SysVolumeMixer</AssemblyName>
         <RootNamespace>VolumeMixer</RootNamespace>
         <IsPackable>false</IsPackable>
         <UserSecretsId>VolumeMixer-PluginDevelopment</UserSecretsId>
@@ -38,6 +38,8 @@
     <ItemGroup>
         <Content Include="manifest.json" CopyToOutputDirectory="PreserveNewest" />
         <Content Include="Assets\icon.svg" CopyToOutputDirectory="PreserveNewest" />
+        <Content Include="..\..\LICENSE" Link="LICENSE" CopyToOutputDirectory="PreserveNewest" />
+        <Content Include="..\..\THIRD-PARTY-NOTICES" Link="THIRD-PARTY-NOTICES" CopyToOutputDirectory="PreserveNewest" />
     </ItemGroup>
 
 </Project>

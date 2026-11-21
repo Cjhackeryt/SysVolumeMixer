@@ -51,7 +51,7 @@
     <value>The application volume could not be changed.</value>
   </data>
   <data name="Variables.ReadOnly.Message" xml:space="preserve">
-    <value>Volume Mixer variables are read-only.</value>
+    <value>This variable is read-only.</value>
   </data>
   <data name="Variables.SlotApp.Display" xml:space="preserve">
     <value>Slot {slot} application</value>
@@ -94,5 +94,21 @@
   </data>
   <data name="Variables.Total.Description" xml:space="preserve">
     <value>Number of applications with an active Windows audio session.</value>
+  </data>
+  <data name="Variables.SliderVolume.Display" xml:space="preserve">
+    <value>Page {page} slot {slot} volume</value>
+    <comment>[page:int][slot:int]</comment>
+  </data>
+  <data name="Variables.SliderVolume.Description" xml:space="preserve">
+    <value>Current volume percentage for the application on this mixer page and slot. Writing this variable changes its audio volume.</value>
+  </data>
+  <data name="Variables.SliderVolume.InvalidValue" xml:space="preserve">
+    <value>Enter a volume from 0 to 100.</value>
+  </data>
+  <data name="Variables.SliderEmpty.Display" xml:space="preserve">
+    <value>Empty mixer slider</value>
+  </data>
+  <data name="Variables.SliderEmpty.Description" xml:space="preserve">
+    <value>Read-only volume value used by an empty mixer slider.</value>
   </data>
 </root>

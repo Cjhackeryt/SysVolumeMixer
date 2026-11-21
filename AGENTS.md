@@ -3,9 +3,10 @@
 This file must be kept up to date. When a rule here stops matching reality, or a new rule emerges from
 work in this repository, update this file as part of that change rather than leaving it to drift.
 
-This repository contains the Windows Volume Mixer, a Macro Deck 3 out-of-process plugin. It is a
+This repository contains SysVolumeMixer, a Windows Macro Deck 3 out-of-process plugin. It is a
 working plugin, not the `dotnet new macrodeck-plugin` template. The integration provides a virtual
-6-by-3 mixer profile, two manual volume actions and read-only variables.
+profile with six vertical volume sliders per page, two manual volume actions and read-only legacy
+variables.
 
 [README.md](README.md) is the human-facing guide to the mixer, its controls, and how to build, test,
 run and package it. This file records implementation rules and invariants that must be kept true
@@ -20,10 +21,10 @@ src/VolumeMixer/
   macrodeck-build.json   one publish target per declared entrypoint
   PluginIntegration.cs   lifecycle, capability opt-ins and widget routing
   Audio/                 Windows audio-session enumeration and volume control
-  Mixer/                 app snapshots, paging and volume-step behavior
+  Mixer/                 app snapshots, paging and volume-setting behavior
   Profiles/              virtual profile and widget payloads
   Actions/                manual volume-up and volume-down actions
-  Variables/              read-only mixer variables
+  Variables/              legacy and page-specific slider variables
   Localization/Strings.resx   default-culture strings; Strings.<tag>.resx per language
   Assets/icon.svg        the icon the manifest declares
   Properties/launchSettings.json   the single real-host debug profile
@@ -31,36 +32,36 @@ tests/VolumeMixer.Tests/
   PluginIntegrationTests.cs   mixer behavior, startup invalidation and capability registration
 ```
 
-The integration provides virtual profiles through `IProfileProvider`; the 18 buttons per page are not
-ordinary action instances. Widget presses are routed by `PluginIntegration.HandleWidgetInteractionAsync`.
-The two manual actions target a detected application directly. Saved actions using the older slot
-parameter continue to target the selected page's slot.
+The integration provides virtual profiles through `IProfileProvider`; the six sliders per page are
+not ordinary action instances. Slider values bind to writable page-and-slot-specific variables, so
+each folder controls the applications shown on that page. A slider write selects its page for the
+legacy slot variables and actions. The two manual actions can also target a detected application
+directly. Keep existing variable IDs stable.
 
 The host's virtual-profile interaction callback can pass an empty profile id and uses `press` for
 short button presses. Route by the plugin-owned folder/widget ids and accept `press`; retain
-`onShortPress` only for clients that send that legacy trigger string.
+`onShortPress` only for clients that send that legacy trigger string. Keep legacy `up-`, `down-` and
+`app-` widget IDs routable for saved boards.
 
-Volume presses on empty or inactive mixer slots are intentional no-ops and should be logged at Debug,
-not Warning. Keep warnings for failed volume changes when an application was assigned to the slot.
+Volume presses or slider writes on empty or inactive mixer slots are intentional no-ops and should
+be logged at Debug, not Warning. Keep warnings for failed volume changes when an application was
+assigned to the slot.
 
-Virtual `ActionButton` payloads use the host's ordinary widget-data schema: keep `label` as a plain
-string and `imageUrl` at the root. Protocol tests verify that descriptors and data survive the wire;
-they do not verify that the host can create a live widget UI session from a virtual profile.
+Slider widget payloads use the host's current Slider schema. Keep `label` a plain string, use the
+native vertical orientation, and bind populated sliders' `valueVariable` to their page-specific
+writable variables. These bindings must be eagerly declared because virtual-profile widgets do not
+materialize on-demand variables through an editor binding step. Each slider spans one column and
+three rows in the three-row, six-column profile grid. Empty slots must use a read-only value binding.
 
-On the Macro Deck host build tested on 2026-10-04, virtual `ActionButton` tiles rendered as blank
-placeholders even with valid widget data. The host's ActionButton UI-session path looks up an
-interactive widget by GUID in its persisted folder cache, while virtual widget ids are qualified
-integration ids and their folders are generated on demand. This is a host-side limitation, not a
-plugin payload problem. Do not keep changing payload fields or package versions to chase this
-symptom; verify again after an upstream host fix.
+`VolumeMixerService` polls active audio sessions from every active Windows render endpoint. Ignore
+the `audiodg` process, which is Windows audio-engine infrastructure rather than a user application.
+When the snapshot changes, invalidate the virtual-profile catalogue and the eager variable
+declarations. Subscribe to changes before starting initial discovery, then invalidate the
+virtual-profile catalogue after discovery even if the first snapshot is empty. Host `describe`
+responses are cached, so skipping these notifications can leave the UI displaying a stale empty
+board.
 
-`VolumeMixerService` polls active audio sessions from the default Windows multimedia render endpoint.
-When the snapshot changes, invalidate both the virtual-profile and variable catalogues. Subscribe to
-changes before starting initial discovery, then invalidate the virtual-profile catalogue after
-discovery even if the first snapshot is empty. Host `describe` responses are cached, so skipping these
-notifications can leave the UI displaying a stale empty board.
-
-The SDK packages are pinned to `3.0.0` in `Directory.Packages.props`. The manifest and
+The SDK packages are pinned to `3.0.4` in `Directory.Packages.props`. The manifest and
 `macrodeck-build.json` currently declare `win-x64` only; keep those declarations aligned if another
 platform is added. The project `AssemblyName`, manifest entrypoint and publish output must also stay
 aligned.
@@ -68,10 +69,18 @@ aligned.
 The current plugin icon is AI-generated. Keep `ai.generatedAssets` true in the manifest and make the
 same declaration in the Creator Portal while that asset is distributed.
 
+`THIRD-PARTY-NOTICES` must match runtime packages in the published `.deps.json` and be copied into
+the package with `LICENSE`. After dependency or asset changes, regenerate the package inventory with
+`python <skill-dir>/scripts/inventory-dependencies.py <publish-dir> --notices THIRD-PARTY-NOTICES --header-name "SysVolumeMixer"`.
+Create `NOTICE` only if a shipped package supplies a NOTICE file or another license requires one.
+
 Authoritative upstream documentation is in the
-[Macro Deck 3 plugin-development docs](https://github.com/Macro-Deck-App/Macro-Deck-3/tree/main/docs/plugin-development):
-`sdk-reference.md`, `plugin-hosting.md`, `capability-parity.md`, `analyzers.md`, `conformance.md`,
-`testing-plugins.md` and `cli.md`. Consult those sources for SDK behavior rather than guessing.
+[Macro Deck docs](https://github.com/Macro-Deck-App/Macro-Deck/tree/main/docs/src/content/docs).
+For this profile, consult the
+[virtual-profile guide](https://github.com/Macro-Deck-App/Macro-Deck/blob/main/docs/src/content/docs/features/virtual-profiles.md),
+[variable guide](https://github.com/Macro-Deck-App/Macro-Deck/blob/main/docs/src/content/docs/features/variables.md),
+and [Slider widget schema](https://github.com/Macro-Deck-App/Macro-Deck/blob/main/host/src/MacroDeckHost.Application/Widgets/Schemas/widget-data-slider-v1.schema.json).
+Consult current upstream SDK sources for other contracts rather than guessing.
 
 ## Store gate
 
@@ -98,10 +107,8 @@ A change is not done until all six hold:
    the matching versions are blocked. `reason` says why. Replace the package or restructure the code
    that needs it. Never work around a block by vendoring, renaming or loading the package some other
    way.
-3. **The Macro Deck SDK is at least `minimumSdkVersion`.** The Macro Deck packages float to the newest
-   published version by default, so this usually holds on its own. It stops holding when
-   `MacroDeckSdkVersion` is pinned, or when a build runs against `local-feed/`. A release must never be
-   built against an SDK older than the minimum.
+3. **The Macro Deck SDK is at least `minimumSdkVersion`.** Check the pinned version and resolved
+   dependency graph. Release builds must restore from nuget.org and never use a local package feed.
 4. **Only allowed Macro Deck packages are used.** Every package in the graph whose id starts with
    `MacroDeck.` must match an entry in `allowedMacroDeckPackages`. Anything else under that prefix is
    refused on upload, including packages from another Macro Deck repository that were never published
@@ -125,11 +132,12 @@ A change is not done until all six hold:
 Report the result of this gate with every change: which version of the guidelines was checked (the
 `X-Creator-Guidelines-Version` response header), and whether each of the six points holds.
 
-The v4 Creator Guidelines prohibit bundling precompiled third-party assemblies, while the supported
+The v7 Creator Guidelines prohibit bundling precompiled third-party assemblies, while the supported
 `macrodeck-plugin build` output currently includes runtime DLLs from NuGet references such as NAudio
 and Serilog. Treat Store publication as blocked until Macro Deck clarifies whether these
 NuGet-sourced runtime assemblies are exempt. Also complete the matching Creator Portal AI declaration
-and provide an actual-use screenshot before submitting this visual plugin.
+add the Store badge to the README, and provide an actual-use screenshot before submitting this visual
+plugin.
 
 ## The rules that make a plugin clean
 
@@ -246,12 +254,16 @@ capture a default before the config read finishes.
 
 ### Localization
 
-- **No user-facing literal.** Every string a user reads is a key in `Localization/Strings.resx`, reached
-  through the generated `Strings` class: action names and descriptions, parameter labels, descriptions
-  and placeholders, `ActionStateDefinition` labels, config flow step titles and field labels, event and
-  variable metadata, issue text, and the message on `ActionResult.Failed`/`Accepted`. A plain `string`
-  converts to `LocalizedText` too, so nothing stops you - which is exactly why this is a rule.
-- `ConfigFlowResult.Complete(title, …)` is the one deliberate exception: it takes a plain `string`
+- **Localize every user-facing value whose SDK type is `LocalizedText`.** Use a key in
+  `Localization/Strings.resx`, reached through the generated `Strings` class: action names and
+  descriptions, parameter labels and descriptions, `ActionStateDefinition` labels, config flow step
+  titles and field labels, event and variable metadata, issue text, and `ActionResult` messages. A plain
+  `string` converts to `LocalizedText`, so an accidental literal compiles without being localized.
+- The SDK currently exposes `IProfileProvider.ProviderName`, `VirtualProfileDescriptor.Name` and
+  `VirtualFolderDescriptor.Name` as plain strings. Omit the optional `ProviderName` so the manifest name
+  is used; keep required profile and folder names in the default language until the SDK accepts
+  `LocalizedText` for them.
+- `ConfigFlowResult.Complete(title, …)` is another deliberate exception: it takes a plain `string`
   because the host stores it as the configured entry's name and the user renames it from there. Write it
   in the default language and leave it.
 - Log messages and exception messages are diagnostics, not UI. They stay English literals; never
@@ -361,10 +373,9 @@ it after any change to capability shape, cancellation handling or the manifest, 
 check going from pass to fail as a blocking regression. Most checks `SKIP` until the plugin declares
 capabilities.
 
-The Macro Deck packages float to the newest published version, so the commands above need no version
-argument. Only to test against SDK surface that is not published yet, pack it into `local-feed/` and
-pass `-p:MacroDeckSdkVersion=<version>` - see "Building against a local SDK build" in
-[README.md](README.md).
+The Macro Deck package versions are pinned in `Directory.Packages.props`. Keep the CLI version aligned
+with the SDK version in the release workflow, and restore only from nuget.org. Do not add local
+package feeds; Store moderators flag them.
 
 ## Packing a plugin release
 

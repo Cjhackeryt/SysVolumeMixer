@@ -1,7 +1,8 @@
+using System.Globalization;
 using System.Text.Json;
 using MacroDeck.Sdk.Profiles;
-using VolumeMixer.Mixer;
 using Serilog;
+using VolumeMixer.Mixer;
 
 namespace VolumeMixer.Profiles;
 
@@ -11,11 +12,6 @@ internal static class VolumeMixerProfile
 
 	private const string FirstFolderId = "mixer";
 	private const string FolderPrefix = "mixer-page-";
-	private const string ActiveColor = "#FFFFFF";
-	private const string EmptyColor = "#A0AEC0";
-	private const string ApplicationBackground = "#20242B";
-	private const string UpBackground = "#2F855A";
-	private const string DownBackground = "#C53030";
 
 	private static readonly JsonSerializerOptions JsonOptions = new()
 	{
@@ -29,22 +25,15 @@ internal static class VolumeMixerProfile
 
 		for (var page = 0; page < pageCount; page++)
 		{
-			var widgets = new List<VirtualWidgetDescriptor>(VolumeMixerService.SlotCount * 3);
+			var widgets = new List<VirtualWidgetDescriptor>(VolumeMixerService.SlotCount);
 			var slots = mixer.GetSlotsForPage(page);
 			for (var column = 0; column < VolumeMixerService.SlotCount; column++)
 			{
-				var application = slots[column];
-				AddWidget(widgets, logger, column, 0, "VolumeUp",
-					$"up-{column}", UpBackground, "+", application is not null, null);
-				AddWidget(widgets, logger, column, 1, "Application",
-					$"app-{column}", ApplicationBackground, ApplicationLabel(application), application is not null,
-					application?.IconDataUri);
-				AddWidget(widgets, logger, column, 2, "VolumeDown",
-					$"down-{column}", DownBackground, "-", application is not null, null);
+				AddSlider(widgets, logger, page, column, slots[column]);
 			}
 
-			var folderId = page == 0 ? FirstFolderId : FolderPrefix + (page + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
-			var folderName = page == 0 ? "Mixer" : "Mixer " + (page + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+			var folderId = page == 0 ? FirstFolderId : FolderPrefix + (page + 1).ToString(CultureInfo.InvariantCulture);
+			var folderName = page == 0 ? "Mixer" : "Mixer " + (page + 1).ToString(CultureInfo.InvariantCulture);
 			folders.Add(new VirtualFolderDescriptor(folderId, folderName, widgets, Order: page));
 		}
 
@@ -52,7 +41,7 @@ internal static class VolumeMixerProfile
 		[
 			new VirtualProfileDescriptor(
 				ProfileId,
-				"Volume Mixer",
+				"SysVolumeMixer",
 				ProfileLayout.Grid(rows: 3, columns: VolumeMixerService.SlotCount),
 				folders),
 		];
@@ -67,7 +56,11 @@ internal static class VolumeMixerProfile
 		if (!string.Equals(folderId, FirstFolderId, StringComparison.Ordinal))
 		{
 			if (!folderId.StartsWith(FolderPrefix, StringComparison.Ordinal) ||
-				!int.TryParse(folderId[FolderPrefix.Length..], out var oneBasedPage) ||
+				!int.TryParse(
+					folderId[FolderPrefix.Length..],
+					NumberStyles.None,
+					CultureInfo.InvariantCulture,
+					out var oneBasedPage) ||
 				oneBasedPage < 2)
 			{
 				return false;
@@ -78,10 +71,20 @@ internal static class VolumeMixerProfile
 
 		var separator = widgetId.IndexOf('-');
 		if (separator < 0 ||
-			!int.TryParse(widgetId[(separator + 1)..], out column) ||
+			!int.TryParse(
+				widgetId[(separator + 1)..],
+				NumberStyles.None,
+				CultureInfo.InvariantCulture,
+				out column) ||
 			column is < 0 or >= VolumeMixerService.SlotCount)
 		{
 			return false;
+		}
+
+		if (widgetId.StartsWith("slider-", StringComparison.Ordinal) ||
+			widgetId.StartsWith("app-", StringComparison.Ordinal))
+		{
+			return true;
 		}
 
 		if (widgetId.StartsWith("up-", StringComparison.Ordinal))
@@ -96,66 +99,38 @@ internal static class VolumeMixerProfile
 			return true;
 		}
 
-		if (widgetId.StartsWith("app-", StringComparison.Ordinal))
-		{
-			return true;
-		}
-
 		return false;
 	}
 
-	private static void AddWidget(
+	private static void AddSlider(
 		List<VirtualWidgetDescriptor> widgets,
 		ILogger logger,
+		int page,
 		int column,
-		int row,
-		string kind,
-		string id,
-		string backgroundColor,
-		string label,
-		bool active,
-		string? imageUrl)
+		Audio.AudioApplication? application)
 	{
-		try
+		var active = application is { IsActive: true };
+		var id = $"slider-{column.ToString(CultureInfo.InvariantCulture)}";
+		var widgetData = JsonSerializer.Serialize(new
 		{
-			var widgetData = JsonSerializer.Serialize(new
-			{
-				mode = "single",
-				label,
-				imageUrl,
-				backgroundColor,
-				labelColor = active ? ActiveColor : EmptyColor,
-				labelPosition = row == 1 ? "bottom" : "center",
-				offState = new
-				{
-					label,
-					backgroundColor,
-					labelColor = active ? ActiveColor : EmptyColor,
-					labelPosition = row == 1 ? "bottom" : "center",
-				},
-			}, JsonOptions);
-			widgets.Add(new VirtualWidgetDescriptor(id, "ActionButton", column, row, Data: widgetData));
-			logger.Debug("[VolumeMixer] Creating widget: Column={Column} Row={Row} Type={Type} Id={WidgetId} created and assigned",
-				column, row, kind, id);
-		}
-		catch (Exception exception)
-		{
-			logger.Error(exception, "[VolumeMixer] Widget creation or assignment failed: Column={Column} Row={Row} Type={Type} Id={WidgetId}",
-				column, row, kind, id);
-			throw;
-		}
-	}
+			label = active ? application!.DisplayName : string.Empty,
+			showLabel = active,
+			showValue = active,
+			orientation = "vertical",
+			min = 0,
+			max = 100,
+			step = 1,
+			valueVariable = active
+				? VolumeMixerSliderBinding.GetName(page, column)
+				: "mixer_slider_empty_volume",
+		}, JsonOptions);
 
-	private static string ApplicationLabel(Audio.AudioApplication? application)
-	{
-		if (application is null)
-		{
-			return "Empty";
-		}
-
-		var volume = application.VolumePercent.ToString(System.Globalization.CultureInfo.InvariantCulture);
-		return application.IsMuted
-			? $"{application.DisplayName} ({volume}%, muted)"
-			: $"{application.DisplayName} {volume}%";
+		widgets.Add(new VirtualWidgetDescriptor(id, "Slider", column, 0, Width: 1, Height: 3, Data: widgetData));
+		logger.Debug(
+			"[SysVolumeMixer] Creating vertical slider: Page={Page} Column={Column} Id={WidgetId} Active={Active}",
+			page + 1,
+			column,
+			id,
+			active);
 	}
 }

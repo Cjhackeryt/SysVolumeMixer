@@ -157,6 +157,12 @@ TestResults
 publish
 /artifacts/
 
-# Locally packed Macro Deck SDK packages - see "Building against a local SDK build" in README.md
-local-feed/*
-!local-feed/.gitkeep
+# Generated reports and scratch data
+/.scratch/
+/conformance.md
+/conformance-*.md
+/mcp_in.json
+/mcp_out.txt
+
+# Local-only package feeds
+/local-feed/

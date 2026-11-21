@@ -3,10 +3,9 @@
     <PropertyGroup>
         <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
         <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
-        <!-- The Macro Deck packages float to the newest published version, so no release version is
-             pinned anywhere in this repository. -->
+        <!-- Keep all Macro Deck packages on the same explicitly selected SDK version. -->
         <CentralPackageFloatingVersionsEnabled>true</CentralPackageFloatingVersionsEnabled>
-        <MacroDeckSdkVersion Condition="'$(MacroDeckSdkVersion)' == ''">3.0.0</MacroDeckSdkVersion>
+        <MacroDeckSdkVersion Condition="'$(MacroDeckSdkVersion)' == ''">3.0.4</MacroDeckSdkVersion>
     </PropertyGroup>
 
     <ItemGroup>

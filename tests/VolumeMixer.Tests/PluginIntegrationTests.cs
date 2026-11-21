@@ -1,12 +1,14 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using MacroDeck.Plugin.Hosting.Integrations.HostApis;
+using MacroDeck.Plugin.Protocol.Capabilities.Variables;
 using MacroDeck.Plugin.Protocol.Capabilities.VirtualProfiles;
 using MacroDeck.Plugin.Testing;
 using MacroDeck.Plugin.Testing.Fakes;
 using MacroDeck.Plugin.Protocol.Handshake;
 using MacroDeck.Sdk.Actions;
 using MacroDeck.Sdk.Profiles;
+using MacroDeck.Sdk.Variables;
 using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
 using Serilog;
@@ -47,6 +49,21 @@ internal sealed class FakeAudioSessionController : IAudioSessionController
 		errorMessage = null;
 		return true;
 	}
+
+	public bool TrySetVolume(string applicationKey, int volumePercent, out int newVolumePercent, out string? errorMessage)
+	{
+		if (!_applications.TryGetValue(applicationKey, out var application))
+		{
+			newVolumePercent = 0;
+			errorMessage = "The selected application's audio session is no longer active.";
+			return false;
+		}
+
+		newVolumePercent = volumePercent;
+		_applications[applicationKey] = application with { VolumePercent = newVolumePercent };
+		errorMessage = null;
+		return true;
+	}
 }
 
 internal sealed class FakeCatalogNotifier : IPluginCatalogNotifier
@@ -83,7 +100,7 @@ internal sealed class MixerTestContext : IAsyncDisposable
 			.WriteTo.Sink(LogSink)
 			.CreateLogger();
 		Mixer = new VolumeMixerService(Audio, Logger);
-		Variables = new VolumeMixerVariableProvider(Mixer);
+		Variables = new VolumeMixerVariableProvider(Mixer, Logger);
 		Catalogs = new FakeCatalogNotifier();
 		Integration = new PluginIntegration(Mixer, Variables, Catalogs, Logger);
 	}
@@ -121,19 +138,19 @@ public sealed class PluginIntegrationTests
 		await using var context = new MixerTestContext(CreateApplication(0, 40));
 
 		var beforeInitialization = context.Integration.GetProfiles()[0].Folders[0].Widgets;
-		Assert.That(GetLabel(beforeInitialization.Single(widget => widget.Id == "app-0").Data), Is.EqualTo("Empty"));
+		Assert.That(GetLabel(beforeInitialization.Single(widget => widget.Id == "slider-0").Data), Is.Empty);
 
 		await context.Integration.InitializeAsync(new FakeIntegrationContext());
 
 		var afterInitialization = context.Integration.GetProfiles()[0].Folders[0].Widgets;
-		var appData = afterInitialization.Single(widget => widget.Id == "app-0").Data;
-		Assert.That(GetLabel(appData), Is.EqualTo("App0 40%"));
+		var appData = afterInitialization.Single(widget => widget.Id == "slider-0").Data;
+		Assert.That(GetLabel(appData), Is.EqualTo("App0"));
 		Assert.That(context.Catalogs.Kinds, Does.Contain(CapabilityKinds.VirtualProfiles));
 		Assert.That(context.Catalogs.Reasons, Does.Contain("mixer-initialized"));
 	}
 
 	[Test]
-	public async Task Profile_is_a_6_by_3_grid_with_18_renderable_widgets()
+	public async Task Profile_has_six_vertical_sliders_with_page_specific_value_bindings()
 	{
 		await using var context = new MixerTestContext(CreateApplication(0, 40), CreateApplication(1, 70));
 		await context.Integration.InitializeAsync(new FakeIntegrationContext());
@@ -142,29 +159,54 @@ public sealed class PluginIntegrationTests
 		Assert.That(profile.Layout.Rows, Is.EqualTo(3));
 		Assert.That(profile.Layout.Columns, Is.EqualTo(6));
 		var widgets = profile.Folders.Single().Widgets;
-		Assert.That(widgets, Has.Count.EqualTo(18));
+		Assert.That(widgets, Has.Count.EqualTo(6));
 
 		for (var column = 0; column < VolumeMixerService.SlotCount; column++)
 		{
+			var widget = widgets.Single(candidate => candidate.Id == $"slider-{column}");
+			var data = GetWidgetData(widget.Data);
 			Assert.Multiple(() =>
 			{
-				var upData = widgets.Single(widget => widget.Id == $"up-{column}").Data;
-				var appData = widgets.Single(widget => widget.Id == $"app-{column}").Data;
-				var downData = widgets.Single(widget => widget.Id == $"down-{column}").Data;
-				Assert.That(GetLabel(upData), Is.EqualTo("+"));
-				Assert.That(GetOffStateLabel(upData), Is.EqualTo("+"));
-				Assert.That(widgets.Single(widget => widget.Id == $"app-{column}").PositionY, Is.EqualTo(1));
-				Assert.That(GetLabel(downData), Is.EqualTo("-"));
-				Assert.That(GetOffStateLabel(downData), Is.EqualTo("-"));
-				Assert.That(GetOffStateLabel(appData), Is.EqualTo(GetLabel(appData)));
+				Assert.That(widget.Type, Is.EqualTo("Slider"));
+				Assert.That(widget.PositionX, Is.EqualTo(column));
+				Assert.That(widget.PositionY, Is.Zero);
+				Assert.That(widget.Width, Is.EqualTo(1));
+				Assert.That(widget.Height, Is.EqualTo(3));
+				Assert.That(data.GetProperty("orientation").GetString(), Is.EqualTo("vertical"));
+				Assert.That(data.GetProperty("min").GetInt32(), Is.Zero);
+				Assert.That(data.GetProperty("max").GetInt32(), Is.EqualTo(100));
+				Assert.That(data.GetProperty("step").GetInt32(), Is.EqualTo(1));
 			});
 		}
 
-		Assert.That(GetLabel(widgets.Single(widget => widget.Id == "app-0").Data), Is.EqualTo("App0 40%"));
-		Assert.That(GetLabel(widgets.Single(widget => widget.Id == "app-1").Data), Is.EqualTo("App1 70%"));
-		Assert.That(GetImageUrl(widgets.Single(widget => widget.Id == "app-0").Data),
-			Is.EqualTo("data:image/png;base64,dGVzdA=="));
-		Assert.That(GetLabel(widgets.Single(widget => widget.Id == "app-5").Data), Is.EqualTo("Empty"));
+		var firstData = GetWidgetData(widgets.Single(widget => widget.Id == "slider-0").Data);
+		Assert.That(GetLabel(widgets.Single(widget => widget.Id == "slider-0").Data), Is.EqualTo("App0"));
+		Assert.That(firstData.GetProperty("showLabel").GetBoolean(), Is.True);
+		Assert.That(firstData.GetProperty("showValue").GetBoolean(), Is.True);
+		Assert.That(firstData.GetProperty("valueVariable").GetString(), Is.EqualTo("mixer_slider_page_1_slot_1_volume"));
+
+		var secondData = GetWidgetData(widgets.Single(widget => widget.Id == "slider-1").Data);
+		Assert.That(GetLabel(widgets.Single(widget => widget.Id == "slider-1").Data), Is.EqualTo("App1"));
+		Assert.That(secondData.GetProperty("valueVariable").GetString(), Is.EqualTo("mixer_slider_page_1_slot_2_volume"));
+		var secondBinding = context.Integration.Variables.Single(variable =>
+			variable.Name == secondData.GetProperty("valueVariable").GetString());
+		Assert.Multiple(() =>
+		{
+			Assert.That(secondBinding.Materialization, Is.EqualTo(VariableMaterialization.Eager));
+			Assert.That(secondBinding.CanWrite, Is.True);
+		});
+
+		var emptyData = GetWidgetData(widgets.Single(widget => widget.Id == "slider-5").Data);
+		Assert.That(GetLabel(widgets.Single(widget => widget.Id == "slider-5").Data), Is.Empty);
+		Assert.That(emptyData.GetProperty("showLabel").GetBoolean(), Is.False);
+		Assert.That(emptyData.GetProperty("showValue").GetBoolean(), Is.False);
+		Assert.That(emptyData.GetProperty("valueVariable").GetString(), Is.EqualTo("mixer_slider_empty_volume"));
+		var emptyBinding = context.Integration.Variables.Single(variable => variable.Id == "slider-empty-volume");
+		Assert.Multiple(() =>
+		{
+			Assert.That(emptyBinding.Materialization, Is.EqualTo(VariableMaterialization.Eager));
+			Assert.That(emptyBinding.CanWrite, Is.False);
+		});
 		Assert.That(widgets.All(widget => !string.IsNullOrWhiteSpace(widget.Data)), Is.True);
 	}
 
@@ -181,8 +223,86 @@ public sealed class PluginIntegrationTests
 
 		var profile = context.Integration.GetProfiles().Single();
 		Assert.That(profile.Folders, Has.Count.EqualTo(expectedPages));
-		Assert.That(profile.Folders.All(folder => folder.Widgets.Count == 18), Is.True);
-		Assert.That(profile.Folders.Sum(folder => folder.Widgets.Count), Is.EqualTo(expectedPages * 18));
+		Assert.That(profile.Folders.All(folder => folder.Widgets.Count == VolumeMixerService.SlotCount), Is.True);
+		Assert.That(profile.Folders.Sum(folder => folder.Widgets.Count), Is.EqualTo(expectedPages * VolumeMixerService.SlotCount));
+		if (expectedPages > 1)
+		{
+			var secondPageData = GetWidgetData(profile.Folders[1].Widgets[0].Data);
+			Assert.That(secondPageData.GetProperty("valueVariable").GetString(), Is.EqualTo("mixer_slider_page_2_slot_1_volume"));
+		}
+	}
+
+	[Test]
+	public async Task Slider_writes_change_only_the_application_on_the_bound_page_and_slot()
+	{
+		var applications = Enumerable.Range(0, 7).Select(index => CreateApplication(index, 50)).ToArray();
+		await using var context = new MixerTestContext(applications);
+		await context.Integration.InitializeAsync(new FakeIntegrationContext());
+
+		var secondPageSlider = context.Integration.GetProfiles().Single().Folders[1].Widgets
+			.Single(widget => widget.Id == "slider-0");
+		var bindingName = GetWidgetData(secondPageSlider.Data).GetProperty("valueVariable").GetString();
+		Assert.That(bindingName, Is.EqualTo("mixer_slider_page_2_slot_1_volume"));
+
+		var definition = await context.Integration.ResolveAsync(bindingName!, CancellationToken.None);
+		Assert.That(definition, Is.Not.Null);
+		Assert.That(definition!.Materialization, Is.EqualTo(VariableMaterialization.Eager));
+		Assert.That(definition.CanWrite, Is.True);
+		Assert.That(definition.Write!.CommitOnRelease, Is.False);
+
+		var result = await context.Integration.SetValueAsync(bindingName!, 73.0);
+
+		Assert.That(result.Status, Is.EqualTo(VariableWriteStatus.Applied));
+		Assert.That(context.Audio.GetApplications().Single(application => application.Key == "app-6").VolumePercent, Is.EqualTo(73));
+		Assert.That(context.Audio.GetApplications().Where(application => application.Key != "app-6")
+			.All(application => application.VolumePercent == 50), Is.True);
+		Assert.That(context.Mixer.GetPage(), Is.EqualTo(1));
+		Assert.That((await context.Integration.ReadAsync(bindingName!)).Value, Is.EqualTo(73.0));
+		Assert.That((await context.Integration.ReadAsync("slot-1-volume")).Value, Is.EqualTo(73.0));
+	}
+
+	[Test]
+	public async Task Slider_writes_reject_invalid_values_and_unavailable_slots()
+	{
+		await using var context = new MixerTestContext(CreateApplication(0, 50));
+		await context.Integration.InitializeAsync(new FakeIntegrationContext());
+
+		var invalidType = await context.Integration.SetValueAsync("slider-page-1-slot-1-volume", "50");
+		var invalidRange = await context.Integration.SetValueAsync("slider-page-1-slot-1-volume", 101.0);
+		var emptySlot = await context.Integration.SetValueAsync("slider-page-1-slot-2-volume", 40.0);
+		var missingPage = await context.Integration.SetValueAsync("slider-page-2-slot-1-volume", 40.0);
+		var readOnly = await context.Integration.SetValueAsync("slot-1-volume", 40.0);
+		var emptyBinding = await context.Integration.SetValueAsync("slider-empty-volume", 40.0);
+
+		Assert.That(invalidType.Status, Is.EqualTo(VariableWriteStatus.InvalidValue));
+		Assert.That(invalidRange.Status, Is.EqualTo(VariableWriteStatus.InvalidValue));
+		Assert.That(emptySlot.Status, Is.EqualTo(VariableWriteStatus.Unavailable));
+		Assert.That(missingPage.Status, Is.EqualTo(VariableWriteStatus.Unavailable));
+		Assert.That(readOnly.Status, Is.EqualTo(VariableWriteStatus.NotWritable));
+		Assert.That(emptyBinding.Status, Is.EqualTo(VariableWriteStatus.NotWritable));
+		Assert.That(context.Audio.GetApplications().Single().VolumePercent, Is.EqualTo(50));
+	}
+
+	[Test]
+	public async Task Slider_bindings_are_eager_and_not_catalog_resources()
+	{
+		await using var context = new MixerTestContext(CreateApplication(0, 50), CreateApplication(1, 60));
+		await context.Integration.InitializeAsync(new FakeIntegrationContext());
+
+		var definition = context.Integration.Variables.Single(variable =>
+			variable.Name == "mixer_slider_page_1_slot_2_volume");
+		var catalog = await context.Integration.DiscoverAsync(
+			new VariableCatalogQuery { Search = "slider_page_1_slot_2", PageSize = 1 },
+			CancellationToken.None);
+
+		Assert.Multiple(() =>
+		{
+			Assert.That(context.Integration.SupportsCatalog, Is.False);
+			Assert.That(context.Integration.CatalogEntryCount, Is.Null);
+			Assert.That(definition.Materialization, Is.EqualTo(VariableMaterialization.Eager));
+			Assert.That(definition.CanWrite, Is.True);
+			Assert.That(catalog.Items, Is.Empty);
+		});
 	}
 
 	[Test]
@@ -242,12 +362,12 @@ public sealed class PluginIntegrationTests
 		Assert.That(context.LogSink.Events.Any(logEvent =>
 			logEvent.Level == LogEventLevel.Debug &&
 			logEvent.MessageTemplate.Text.StartsWith(
-				"[VolumeMixer] Ignored volume press for an empty or inactive column",
+				"[SysVolumeMixer] Ignored volume press for an empty or inactive column",
 				StringComparison.Ordinal)), Is.True);
 		Assert.That(context.LogSink.Events.Any(logEvent =>
 			logEvent.Level == LogEventLevel.Warning &&
 			logEvent.MessageTemplate.Text.StartsWith(
-				"[VolumeMixer] Volume change failed",
+				"[SysVolumeMixer] Volume change failed",
 				StringComparison.Ordinal)), Is.False);
 	}
 
@@ -312,8 +432,8 @@ public sealed class PluginIntegrationTests
 		Assert.That(context.Catalogs.Kinds.Count, Is.GreaterThan(notificationCount));
 		Assert.That(context.Catalogs.Kinds, Does.Contain(CapabilityKinds.VirtualProfiles));
 		Assert.That(context.Catalogs.Kinds, Does.Contain(CapabilityKinds.Variables));
-		var appData = context.Integration.GetProfiles()[0].Folders[0].Widgets.Single(widget => widget.Id == "app-1").Data;
-		Assert.That(GetLabel(appData), Is.EqualTo("App1 60%"));
+		var appData = context.Integration.GetProfiles()[0].Folders[0].Widgets.Single(widget => widget.Id == "slider-1").Data;
+		Assert.That(GetLabel(appData), Is.EqualTo("App1"));
 	}
 
 	[Test]
@@ -394,19 +514,28 @@ public sealed class PluginIntegrationTests
 		Assert.That(outcome.Succeeded, Is.True);
 		var profiles = outcome.DataAs<VirtualProfilesResult>();
 		Assert.That(profiles, Is.Not.Null);
-		Assert.That(profiles!.Profiles.Single().Folders.Single().Widgets, Has.Count.EqualTo(18));
-		var appData = profiles.Profiles.Single().Folders.Single().Widgets.Single(widget => widget.Id == "app-0").Data;
-		Assert.That(GetLabel(appData), Is.EqualTo("App0 62%"));
-		Assert.That(GetImageUrl(appData), Is.EqualTo("data:image/png;base64,dGVzdA=="));
+		var widgets = profiles!.Profiles.Single().Folders.Single().Widgets;
+		Assert.That(widgets, Has.Count.EqualTo(VolumeMixerService.SlotCount));
+		var appData = widgets.Single(widget => widget.Id == "slider-0").Data;
+		Assert.That(GetLabel(appData), Is.EqualTo("App0"));
+		var bindingName = GetWidgetData(appData).GetProperty("valueVariable").GetString();
+		Assert.That(bindingName, Is.EqualTo("mixer_slider_page_1_slot_1_volume"));
 
 		var interaction = await harness.VirtualProfiles.SendWidgetInteractionAsync(new WidgetInteractionArguments
 		{
 			ProfileId = string.Empty,
 			FolderId = "mixer",
-			WidgetId = "up-0",
+			WidgetId = "slider-0",
 			TriggerType = "press",
 		});
 		Assert.That(interaction.Succeeded, Is.True);
+		Assert.That(audio.GetApplications().Single().VolumePercent, Is.EqualTo(62));
+
+		var sliderWrite = await harness.Variables.SetAsync(
+			"slider-page-1-slot-1-volume",
+			new VariableValueDto { Kind = "number", Number = 67 });
+		Assert.That(sliderWrite.Succeeded, Is.True);
+		Assert.That(sliderWrite.DataAs<VariableSetResult>()?.Status, Is.EqualTo("Applied"));
 		Assert.That(audio.GetApplications().Single().VolumePercent, Is.EqualTo(67));
 
 		var action = await harness.Actions.ExecuteAsync(
@@ -432,7 +561,7 @@ public sealed class PluginIntegrationTests
 	[Test]
 	public void The_catalog_is_scoped_to_the_plugin_id()
 	{
-		Assert.That(Strings.LocalizationCatalog.Scope, Is.EqualTo("plugin:com.cjhackeryt.volumemixer"));
+		Assert.That(Strings.LocalizationCatalog.Scope, Is.EqualTo("plugin:com.cjhackeryt.sysvolumemixer"));
 	}
 
 	private static AudioApplication CreateApplication(int index, int volume) =>
@@ -457,20 +586,11 @@ public sealed class PluginIntegrationTests
 		return label.GetString() ?? string.Empty;
 	}
 
-	private static string GetOffStateLabel(string? data)
+	private static JsonElement GetWidgetData(string? data)
 	{
 		Assert.That(data, Is.Not.Null.And.Not.Empty);
 		using var document = JsonDocument.Parse(data!);
-		var label = document.RootElement.GetProperty("offState").GetProperty("label");
-		Assert.That(label.ValueKind, Is.EqualTo(JsonValueKind.String));
-		return label.GetString() ?? string.Empty;
-	}
-
-	private static string? GetImageUrl(string? data)
-	{
-		Assert.That(data, Is.Not.Null.And.Not.Empty);
-		using var document = JsonDocument.Parse(data!);
-		return document.RootElement.GetProperty("imageUrl").GetString();
+		return document.RootElement.Clone();
 	}
 
 	private static string GetLocalizedKey(object localizedText)

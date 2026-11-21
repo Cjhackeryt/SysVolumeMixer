@@ -1,13 +1,13 @@
 {
   "$schema": "https://schemas.macro-deck.app/plugin-manifest-v1.schema.json",
   "manifestVersion": 1,
-  "id": "com.cjhackeryt.volumemixer",
-  "name": "Volume Mixer",
-  "version": "0.1.6",
+  "id": "com.cjhackeryt.sysvolumemixer",
+  "name": "SysVolumeMixer",
+  "version": "26.11.22",
   "description": "A Windows per-application volume mixer for Macro Deck.",
   "icon": "Assets/icon.svg",
   "entrypoints": {
-    "win-x64": { "executable": "runtimes/win-x64/VolumeMixer.dll", "runtime": { "kind": "FrameworkDependent", "dotnetVersion": "10.0" } }
+    "win-x64": { "executable": "runtimes/win-x64/SysVolumeMixer.dll", "runtime": { "kind": "FrameworkDependent", "dotnetVersion": "10.0" } }
   },
   "publisher": {
     "name": "Cjhackeryt"

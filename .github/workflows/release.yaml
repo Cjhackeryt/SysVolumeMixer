@@ -1,0 +1,17 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    uses: Macro-Deck-App/GitHub-Actions/.github/workflows/publish-plugin.yml@v1
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      version: ${{ github.event.release.tag_name }}
+      source: src/VolumeMixer
+      # Match the SDK pin.
+      cli-version: 3.0.4

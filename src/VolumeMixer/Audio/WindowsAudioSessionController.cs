@@ -86,89 +86,110 @@ public sealed class WindowsAudioSessionController : IAudioSessionController
 		}
 	}
 
-	private List<SessionSnapshot> ReadActiveSessions()
+	public bool TrySetVolume(string applicationKey, int volumePercent, out int newVolumePercent, out string? errorMessage)
 	{
-		using var enumerator = new MMDeviceEnumerator();
-		using var device = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
-		var sessionCollection = device.AudioSessionManager.Sessions;
-		var snapshots = new List<SessionSnapshot>(sessionCollection.Count);
-
-		for (var index = 0; index < sessionCollection.Count; index++)
+		newVolumePercent = 0;
+		errorMessage = null;
+		if (volumePercent is < 0 or > 100)
 		{
-			using var session = sessionCollection[index];
-			try
-			{
-				if (session.State != NAudio.CoreAudioApi.Interfaces.AudioSessionState.AudioSessionStateActive || session.IsSystemSoundsSession)
-				{
-					continue;
-				}
-
-				var processId = session.GetProcessID;
-				if (processId == 0 || processId > int.MaxValue)
-				{
-					continue;
-				}
-
-				var process = DescribeProcess(processId);
-				using var volume = session.SimpleAudioVolume;
-				snapshots.Add(new SessionSnapshot(
-					process.Key,
-					(int)processId,
-					process.Name,
-					ResolveDisplayName(session.DisplayName, process.Name),
-					process.ExecutablePath,
-					(int)Math.Round(Math.Clamp(volume.Volume, 0f, 1f) * 100f, MidpointRounding.AwayFromZero),
-					volume.Mute));
-			}
-			catch (Exception exception) when (exception is COMException or InvalidOperationException or Win32Exception or ArgumentException)
-			{
-				_logger.Debug(exception, "A Windows audio session could not be read and was skipped.");
-			}
+			errorMessage = "The volume must be between 0 and 100.";
+			return false;
 		}
 
+		lock (_gate)
+		{
+			var applied = ApplyVolume(applicationKey, volumePercent);
+			if (!applied)
+			{
+				errorMessage = "The selected application's audio session ended before its volume could be changed.";
+				return false;
+			}
+
+			newVolumePercent = volumePercent;
+			return true;
+		}
+	}
+
+	private List<SessionSnapshot> ReadActiveSessions()
+	{
+		var snapshots = new List<SessionSnapshot>();
+		ForEachActiveSession((session, processId, process) =>
+		{
+			using var volume = session.SimpleAudioVolume;
+			snapshots.Add(new SessionSnapshot(
+				process.Key,
+				(int)processId,
+				process.Name,
+				ResolveDisplayName(session.DisplayName, process.Name),
+				process.ExecutablePath,
+				(int)Math.Round(Math.Clamp(volume.Volume, 0f, 1f) * 100f, MidpointRounding.AwayFromZero),
+				volume.Mute));
+		});
 		return snapshots;
 	}
 
 	private bool ApplyVolume(string applicationKey, int targetPercent)
 	{
-		using var enumerator = new MMDeviceEnumerator();
-		using var device = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
-		var sessionCollection = device.AudioSessionManager.Sessions;
 		var applied = 0;
-
-		for (var index = 0; index < sessionCollection.Count; index++)
+		ForEachActiveSession((session, processId, process) =>
 		{
-			using var session = sessionCollection[index];
-			try
+			if (string.Equals(process.Key, applicationKey, StringComparison.OrdinalIgnoreCase))
 			{
-				if (session.State != NAudio.CoreAudioApi.Interfaces.AudioSessionState.AudioSessionStateActive || session.IsSystemSoundsSession)
-				{
-					continue;
-				}
-
-				var processId = session.GetProcessID;
-				if (processId == 0 || processId > int.MaxValue)
-				{
-					continue;
-				}
-
-				var process = DescribeProcess(processId);
-				if (!string.Equals(process.Key, applicationKey, StringComparison.OrdinalIgnoreCase))
-				{
-					continue;
-				}
-
 				using var volume = session.SimpleAudioVolume;
 				volume.Volume = targetPercent / 100f;
 				applied++;
 			}
-			catch (Exception exception) when (exception is COMException or InvalidOperationException or Win32Exception or ArgumentException)
-			{
-				_logger.Debug(exception, "An audio session could not be updated because it ended or became unavailable.");
-			}
-		}
+		});
 
 		return applied > 0;
+	}
+
+	private void ForEachActiveSession(Action<AudioSessionControl, uint, ProcessDescription> action)
+	{
+		using var enumerator = new MMDeviceEnumerator();
+		foreach (var device in enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
+		{
+			using (device)
+			{
+				try
+				{
+					var sessions = device.AudioSessionManager.Sessions;
+					for (var index = 0; index < sessions.Count; index++)
+					{
+						using var session = sessions[index];
+						try
+						{
+							if (session.State != NAudio.CoreAudioApi.Interfaces.AudioSessionState.AudioSessionStateActive ||
+								session.IsSystemSoundsSession)
+							{
+								continue;
+							}
+
+							var processId = session.GetProcessID;
+							if (processId == 0 || processId > int.MaxValue)
+							{
+								continue;
+							}
+
+							var process = DescribeProcess(processId);
+							if (!string.Equals(process.Name, "audiodg", StringComparison.OrdinalIgnoreCase))
+							{
+								action(session, processId, process);
+							}
+						}
+						catch (Exception exception) when (exception is COMException or InvalidOperationException or Win32Exception or ArgumentException)
+						{
+							_logger.Debug(exception, "A Windows audio session could not be read or updated and was skipped.");
+						}
+					}
+				}
+				catch (Exception exception) when (exception is COMException or InvalidOperationException or Win32Exception or ArgumentException)
+				{
+					_logger.Debug(exception, "Audio sessions on render endpoint {EndpointName} could not be enumerated.",
+						device.FriendlyName);
+				}
+			}
+		}
 	}
 
 	private ProcessDescription DescribeProcess(uint processId)

@@ -13,5 +13,6 @@ jobs:
     with:
       version: ${{ github.event.release.tag_name }}
       source: src/VolumeMixer
+      build-per-platform: true
       # Match the SDK pin.
       cli-version: 3.0.4

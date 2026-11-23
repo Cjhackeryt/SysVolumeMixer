@@ -120,7 +120,7 @@ A change is not done until all six hold:
    characters, as an SPDX identifier such as `MIT`; the Store shows it as the plugin's licence.
    `repository` must be the GitHub repository the plugin is built and released from, written
    `https://github.com/<owner>/<name>`; an upload from any other repository is refused. This project
-   currently names the public `Cjhackeryt/Volumermixer-trial` repository and its owner in the manifest.
+   currently names the public `Cjhackeryt/SysVolumeMixer` repository and its owner in the manifest.
 6. **The plugin passes the conformance suite on every platform it declares.** The Store refuses a build
    that does not come with a conformance report for each platform in `entrypoints`, or whose report shows
    a failed Required check, never reached the plugin (`MDC0201`, the handshake, did not pass), or is for
@@ -386,6 +386,9 @@ macrodeck-plugin inspect --artifact ./artifacts/<id>-<version>.macroDeckPlugin
 
 `build` reads `macrodeck-build.json`, publishes each runtime identifier the manifest declares into its
 `runtimes/<rid>/` slot and packs the result. `--rid <rid>` builds one platform, for a CI matrix job.
+
+The Release workflow sets `build-per-platform: true` because this plugin's actions are Windows-only;
+otherwise its test suite runs on the reusable workflow's Linux cross-build runner.
 
 A `dotnet build -c Release` output is *not* packable: the manifest points at `runtimes/<rid>/`, which
 only `build` assembles, so `validate`/`pack` against `bin/Release/net10.0` fails on a missing entrypoint.
